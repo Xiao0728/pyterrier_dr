@@ -1,5 +1,6 @@
 from more_itertools import chunked
 import numpy as np
+import pandas as pd
 import torch
 from torch import nn
 import ir_datasets
@@ -34,6 +35,7 @@ class TctColBert(pt.transformer.TransformerBase):
             if all(f in columns for f in fields):
                 return fn(inp)
         message = f'Unexpected input with columns: {inp.columns}. Supports:'
+        print(">>>>>mode",modes)
         for fields, fn in modes:
             f += f'\n - {fn.__doc__.strip()}: {columns}\n'
         raise RuntimeError(message)
@@ -198,3 +200,84 @@ class TctColBert(pt.transformer.TransformerBase):
                 #     break
         import pdb; pdb.set_trace()
         inp
+        
+        
+        
+class TCTPRF(TctColBert):
+    """
+    in the following is the query encoder: TCTPRF
+    """
+    def __init__(self, prf_type = "anceprf",k=3, return_docs=False,model_name='/nfs/xiao/TCT_PRF/checkpoint',cuda=None):
+        super().__init__(model_name=model_name)
+        self.k = k
+        self.return_docs = return_docs
+        print(">>>>>>>>>>prf_type:", prf_type)
+        self.modes = [
+                (['qid', 'query', 'docno', self.text_field], self._transform_R_PRF)
+            ]
+
+        # if prf_type == "anceprf":
+        #     """
+        #     anceprf: a new encoder: input = [query + 3PRF doc_texts], as new query
+        #     """
+        #     self.modes = [
+        #         (['qid', 'query', 'docno', self.text_field], self._transform_R_PRF)
+        #     ]
+         
+        # elif prf_type == "vectorprf":
+        #     """
+        #     vectorprf: take the average 
+        #     """
+        #     pass
+        # elif prf_type == "rocchioprf":
+        #     """
+        #     take the self.alpha*query_vec + 
+        #     """
+        #     pass
+
+    def _transform_R_PRF(self, inp):
+        assert "docno" in inp.columns
+        assert "qid" in inp.columns
+        assert "query" in inp.columns 
+        assert self.text_field in inp.columns
+        print(">>>>>>performing TCT-PRF")
+
+        new_qids = []
+        new_query_embs = []
+        iter = inp.groupby("qid")
+        iter = pt.tqdm(iter, desc='PRF', unit='q') if self.verbose else iter
+        for qid, group in iter:
+            k = min(self.k, len(group))
+            passage_texts = group.sort_values("rank").head(k)[self.text_field].values
+            passage_texts = [group.iloc[0].query] + passage_texts
+            #this line from pyserini
+            full_text = f'{self.tokenizer.cls_token}{self.tokenizer.sep_token.join(passage_texts)}{self.tokenizer.sep_token}'
+            
+            new_qmeb = self.encode(full_text)
+            new_qids.append(qid)
+            new_query_embs.append( np.squeeze(new_qmeb) )
+        qembs_df = pd.DataFrame(data={'qid' : new_qids, 'query_vec' : new_query_embs})
+        # rtr = inp[["qid", "query"]].drop_duplicates().merge(qembs_df, on='qid')
+
+        if self.return_docs:
+            rtr = inp[["qid","query","docno","text"]].merge(qembs_df,on='qid')
+        else:
+            rtr = inp[["qid", "query"]].drop_duplicates().merge(qembs_df, on='qid')        
+        return rtr    
+
+    def encode(self, prf_query : str):    
+        import transformers
+        inputs = self.tokenizer(
+            [prf_query],
+            max_length=512,
+            padding='longest',
+            truncation=True,
+            add_special_tokens=False,
+            return_tensors='pt'
+        )  
+       #inputs = inputs.to(cuda)
+        inputs = inputs.to(self.model.device)
+        embeddings = self.model(inputs["input_ids"], inputs["attention_mask"]).detach().cpu().numpy()
+        return embeddings
+    
+    
