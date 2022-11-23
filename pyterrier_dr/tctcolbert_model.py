@@ -7,6 +7,7 @@ import ir_datasets
 import pyterrier as pt
 from transformers import RobertaConfig, AutoTokenizer, AutoModel, AdamW
 
+# import pdb; pdb.set_trace()
 
 logger = ir_datasets.log.easy()
 
@@ -23,20 +24,21 @@ class TctColBert(pt.transformer.TransformerBase):
         self.text_field = text_field
         self.verbose = verbose
         self._optimizer = None
-
-    def transform(self, inp):
-        columns = set(inp.columns)
-        modes = [
+        self.modes = [
             (['qid', 'query', 'docno', self.text_field], self._transform_R),
             (['qid', 'query'], self._transform_Q),
             (['docno', self.text_field], self._transform_D),
         ]
-        for fields, fn in modes:
+
+    def transform(self, inp):
+        columns = set(inp.columns)
+        
+        for fields, fn in self.modes:
             if all(f in columns for f in fields):
                 return fn(inp)
         message = f'Unexpected input with columns: {inp.columns}. Supports:'
-        print(">>>>>mode",modes)
-        for fields, fn in modes:
+        print(">>>>>mode",self.modes)
+        for fields, fn in self.modes:
             f += f'\n - {fn.__doc__.strip()}: {columns}\n'
         raise RuntimeError(message)
 
@@ -207,33 +209,15 @@ class TCTPRF(TctColBert):
     """
     in the following is the query encoder: TCTPRF
     """
-    def __init__(self, prf_type = "anceprf",k=3, return_docs=False,model_name='/nfs/xiao/TCT_PRF/checkpoint',cuda=None):
+    def __init__(self,k=3, return_docs=False,model_name='/nfs/xiao/TCT_PRF/checkpoint',cuda=None):
         super().__init__(model_name=model_name)
         self.k = k
         self.return_docs = return_docs
-        print(">>>>>>>>>>prf_type:", prf_type)
+        # print(">>>>>>>>>>prf_type:", prf_type)
         self.modes = [
                 (['qid', 'query', 'docno', self.text_field], self._transform_R_PRF)
             ]
 
-        # if prf_type == "anceprf":
-        #     """
-        #     anceprf: a new encoder: input = [query + 3PRF doc_texts], as new query
-        #     """
-        #     self.modes = [
-        #         (['qid', 'query', 'docno', self.text_field], self._transform_R_PRF)
-        #     ]
-         
-        # elif prf_type == "vectorprf":
-        #     """
-        #     vectorprf: take the average 
-        #     """
-        #     pass
-        # elif prf_type == "rocchioprf":
-        #     """
-        #     take the self.alpha*query_vec + 
-        #     """
-        #     pass
 
     def _transform_R_PRF(self, inp):
         assert "docno" in inp.columns
@@ -251,13 +235,16 @@ class TCTPRF(TctColBert):
             passage_texts = group.sort_values("rank").head(k)[self.text_field].values
             passage_texts = [group.iloc[0].query] + passage_texts
             #this line from pyserini
-            full_text = f'{self.tokenizer.cls_token}{self.tokenizer.sep_token.join(passage_texts)}{self.tokenizer.sep_token}'
+            full_text = f'{self.tokenizer.sep_token.join(passage_texts)}'
+            # full_text = f'{self.tokenizer.cls_token}{self.tokenizer.sep_token.join(passage_texts)}{self.tokenizer.sep_token}'
+            # import pdb; pdb.set_trace()
+            
             
             new_qmeb = self.encode(full_text)
             new_qids.append(qid)
             new_query_embs.append( np.squeeze(new_qmeb) )
         qembs_df = pd.DataFrame(data={'qid' : new_qids, 'query_vec' : new_query_embs})
-        # rtr = inp[["qid", "query"]].drop_duplicates().merge(qembs_df, on='qid')
+        
 
         if self.return_docs:
             rtr = inp[["qid","query","docno","text"]].merge(qembs_df,on='qid')
@@ -275,9 +262,10 @@ class TCTPRF(TctColBert):
             add_special_tokens=False,
             return_tensors='pt'
         )  
-       #inputs = inputs.to(cuda)
         inputs = inputs.to(self.model.device)
-        embeddings = self.model(inputs["input_ids"], inputs["attention_mask"]).detach().cpu().numpy()
+        embeddings = self.model(**inputs).last_hidden_state
+        embeddings = embeddings[:, 4:, :].mean(dim=1).detach().cpu().numpy() 
+        
         return embeddings
     
     
