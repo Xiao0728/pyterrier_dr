@@ -69,13 +69,13 @@ class ANCE(pt.transformer.TransformerBase):
         results = []
         with torch.no_grad():
             for chunk in chunked(texts, self.batch_size):
-                # inps = self.tokenizer(chunk, add_special_tokens=True, return_tensors='pt', padding=True, truncation=True, max_length = self.max_query_length )
                 import transformers
-                print("transformers version = ",transformers.__version__)
+                # print("transformers version = ",transformers.__version__)
                 if transformers.__version__ < '3':
                     for q in chunk:
-                        q = ' '.join(q)
+                        # q = ' '.join(q)
                         inps_v2 = self.tokenizer.encode(q, add_special_tokens=True, return_tensors='pt', max_length = self.max_query_length)
+                        
                         if self.cuda:
                             inps_v2 = inps_v2.to(device)
                         inps = [inps_v2, torch.ones_like(inps_v2)]
@@ -224,8 +224,8 @@ class ANCEPRF(ANCE):
         iter = pt.tqdm(iter, desc='PRF', unit='q') if self.verbose else iter
         for qid, group in iter:
             k = min(self.k, len(group))
-            passage_texts = group.sort_values("rank").head(k)[self.text_field].tolist()
-            q_emb = self._encode_query_texts(group.iloc[0].query) # encode the query using the ance encoder
+            passage_texts = group.sort_values("rank").head(k)[self.text_field].values.tolist()
+            q_emb = self._encode_query_texts([group.iloc[0].query]) # encode the query using the ance encoder
             prf_embs = self._encode_doc_texts(passage_texts) # encode the prfs using the ance encoder
             new_qembs = np.mean(np.vstack((q_emb, prf_embs)),axis=0)
             new_qids.append(qid)
@@ -261,8 +261,8 @@ class ANCEPRF(ANCE):
         iter = pt.tqdm(iter, desc='PRF', unit='q') if self.verbose else iter
         for qid, group in iter:
             k = min(self.k, len(group))
-            passage_texts = group.sort_values("rank").head(k)[self.text_field].tolist()
-            q_emb = self._encode_query_texts(group.iloc[0].query) # encode the query using the ance encoder
+            passage_texts = group.sort_values("rank").head(k)[self.text_field].values.tolist()
+            q_emb = self._encode_query_texts([group.iloc[0].query]) # encode the query using the ance encoder
             prf_embs = self._encode_doc_texts(passage_texts) # encode the prfs using ance encoder
             weighted_mean_prf_embs = self.beta * np.mean(prf_embs,  axis = 0)
             weighted_query_emb = self.alpha * q_emb
@@ -290,24 +290,23 @@ class ANCEPRF(ANCE):
         assert "qid" in inp.columns
         assert "query" in inp.columns 
         assert self.text_field in inp.columns
-        print(">>>>>>performing ANCE-PRF")
+        
 
         new_qids = []
         new_query_embs = []
         iter = inp.groupby("qid")
         iter = pt.tqdm(iter, desc='PRF', unit='q') if self.verbose else iter
+        
         for qid, group in iter:
             k = min(self.k, len(group))
-            passage_texts = group.sort_values("rank").head(k)[self.text_field].values
-            passage_texts = [group.iloc[0].query] + passage_texts
-            #this line from pyserini
+            prf_texts = group.sort_values("rank").head(k)[self.text_field].values.tolist()
+            passage_texts = [group.iloc[0].query] + prf_texts
             full_text = f'{self.tokenizer.cls_token}{self.tokenizer.sep_token.join(passage_texts)}{self.tokenizer.sep_token}'
-            
             new_qmeb = self.encode(full_text)
             new_qids.append(qid)
             new_query_embs.append( np.squeeze(new_qmeb) )
         qembs_df = pd.DataFrame(data={'qid' : new_qids, 'query_vec' : new_query_embs})
-        # rtr = inp[["qid", "query"]].drop_duplicates().merge(qembs_df, on='qid')
+    
 
         if self.return_docs:
             rtr = inp[["qid","query","docno","text"]].merge(qembs_df,on='qid')
@@ -345,7 +344,7 @@ class ANCEPRF(ANCE):
             add_special_tokens=False,
             return_tensors='pt'
         )
-        # inputs = inputs.to(self.args.device)
+     
         inputs = inputs.to(self.model.device)
         embeddings = self.model(inputs["input_ids"], inputs["attention_mask"]).detach().cpu().numpy()
         return embeddings
@@ -364,6 +363,5 @@ class ANCEPRF(ANCE):
         inputs = inputs.to(self.model.device)
         with torch.no_grad():
             embeddings = self.model(inputs["input_ids"], inputs["attention_mask"]).cpu().numpy()
-            # embeddings = self.model(inputs["input_ids"], inputs["attention_mask"]).detach().cpu().numpy()
         return embeddings
     
