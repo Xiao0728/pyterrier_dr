@@ -7,38 +7,36 @@ import pyterrier as pt
 from transformers import RobertaConfig, RobertaTokenizer, RobertaForSequenceClassification
 
 import transformers
-
+device = torch.device('cuda:0')
+    
 class ANCE(pt.transformer.TransformerBase):
     def __init__(self, model_name='/home/sean/data/ance/msmarco-firstp-checkpoint/', batch_size=216, text_field='text', verbose=False, cuda=None):
         self.model_name = model_name
-        self.tokenizer = RobertaTokenizer.from_pretrained(model_name, do_lower_case=True)
+        self.tokenizer = RobertaTokenizer.from_pretrained(self.model_name, do_lower_case=True)
         self.cuda = torch.cuda.is_available() if cuda is None else cuda
-        self.model = _ANCEModel.from_pretrained(model_name).eval()
+        self.model = _ANCEModel.from_pretrained(self.model_name).eval()
         if self.cuda:
             self.model = self.model.cuda()
             self.cuda = True
-
         self.batch_size = batch_size
         self.text_field = text_field
         self.verbose = verbose
         self.max_query_length = 64
         self.max_seq_length = 128
-        
+
+
         self.modes = [
             (['qid', 'query', 'docno', self.text_field], self._transform_R), # encode both query and documents
             (['qid', 'query', 'docno', self.text_field, 'query_vec'], self._transform_R), # encode both query and documents
             (['qid', 'query'], self._transform_Q), # query encoder
             (['docno', self.text_field], self._transform_D), # document encoder
-#             (['docno','query', 'docno', 'query_vec',self.text_field], self._transform_R), 
+#          
         ]
 
     def transform(self, inp):
-        #TODO: if quer_vec alreadyt exists in the column, how to retrieve documents using this query_vec?
         columns = set(inp.columns)
         
         for fields, fn in self.modes:
-            if 'query_vec' in fields:
-                print("query Vector in inp columns")
             if all(f in columns for f in fields):
                 return fn(inp)
         message = f'Unexpected input with columns: {inp.columns}. Supports:'
@@ -71,33 +69,46 @@ class ANCE(pt.transformer.TransformerBase):
         results = []
         with torch.no_grad():
             for chunk in chunked(texts, self.batch_size):
-                inps = self.tokenizer(chunk, add_special_tokens=True, return_tensors='pt', padding=True, truncation=True, max_length = self.max_query_length )
-                # import transformers
-                # return self.encode_v2(prf_query) if transformers.__version__ < '3' else self.encode_v3(prf_query)
-                # if transformers.__version__ < '3':
-                #     inps = self.tokenizer.encode(chunk, add_special_tokens=True, return_tensors='pt', max_length = self.max_query_length)
-                # else:
-                #     inps = self.tokenizer.encode(chunk, add_special_tokens=True, return_tensors='pt', max_length = self.max_query_length, padding=True, truncation=True)
-                if self.cuda:
-                    inps = {k: v.cuda() for k, v in inps.items()}
-                results.append(self.model(**inps).cpu().numpy())
+                # inps = self.tokenizer(chunk, add_special_tokens=True, return_tensors='pt', padding=True, truncation=True, max_length = self.max_query_length )
+                import transformers
+                print("transformers version = ",transformers.__version__)
+                if transformers.__version__ < '3':
+                    for q in chunk:
+                        q = ' '.join(q)
+                        inps_v2 = self.tokenizer.encode(q, add_special_tokens=True, return_tensors='pt', max_length = self.max_query_length)
+                        if self.cuda:
+                            inps_v2 = inps_v2.to(device)
+                        inps = [inps_v2, torch.ones_like(inps_v2)]
+                        results.append(self.model(*inps).cpu().numpy())
+                    
+                else:
+                    inps = self.tokenizer(chunk, add_special_tokens=True, return_tensors='pt', max_length = self.max_query_length, padding=True, truncation=True)
+                    if self.cuda:
+                        inps = {k: v.cuda() for k, v in inps.items()}
+                    results.append(self.model(**inps).cpu().numpy())
         return np.concatenate(results, axis=0)
 
     def _encode_doc_texts(self, texts):
         results = []
         with torch.no_grad():
             for chunk in chunked(texts, self.batch_size):
-                inps = self.tokenizer(chunk, add_special_tokens=True, return_tensors='pt', padding=True, truncation=True, max_length = self.max_seq_length )
+                # inps = self.tokenizer(chunk, add_special_tokens=True, return_tensors='pt', padding=True, truncation=True, max_length = self.max_seq_length )
 
-                # import transformers
-                # if transformers.__version__ <'3':
-                #     inps = self.tokenizer.encode(chunk, add_special_tokens=True, return_tensors='pt', max_length = self.max_seq_length)
-                # else:
-                #     inps = self.tokenizer.encode(chunk, add_special_tokens=True, return_tensors='pt', max_length = self.max_seq_length, padding=True, truncation=True)
+                import transformers
+                if transformers.__version__ <'3':
+                    for d in chunk:
+                        d = ' '.join(d)
+                        inps_v2 = self.tokenizer.encode(d, add_special_tokens=True, return_tensors='pt', max_length = self.max_seq_length)
+                        if self.cuda:
+                            inps_v2 = inps_v2.to(device)
+                        inps = [inps_v2, torch.ones_like(inps_v2)]
+                        results.append(self.model(*inps).cpu().numpy())
+                else:
+                    inps = self.tokenizer(chunk, add_special_tokens=True, return_tensors='pt', max_length = self.max_seq_length, padding=True, truncation=True)
  
-                if self.cuda:
-                    inps = {k: v.cuda() for k, v in inps.items()}
-                results.append(self.model(**inps).cpu().numpy())
+                    if self.cuda:
+                        inps = {k: v.cuda() for k, v in inps.items()}
+                    results.append(self.model(**inps).cpu().numpy())
         return np.concatenate(results, axis=0)
 
     def _transform_D(self, inp):
@@ -157,31 +168,8 @@ class _ANCEModel(RobertaForSequenceClassification):
         query1 = self.norm(self.embeddingHead(full_emb))
         return query1
     
-    
 
-def _load_model(args, checkpoint_path):
-    from ance.drivers.run_ann_data_gen import load_model
-    # support downloads of checkpoints
-    if checkpoint_path.startswith("http"):
-        print("Downloading checkpoint %s" % checkpoint_path)
-        import tempfile, wget
-        targetZip = os.path.join(tempfile.mkdtemp(), 'checkpoint.zip')
-        wget.download(checkpoint_path, targetZip)
-        checkpoint_path = targetZip
-    
-    # support zip files of checkpoints
-    if checkpoint_path.endswith(".zip"):
-        import tempfile, zipfile
-        print("Extracting checkpoint %s" % checkpoint_path)
-        targetDir = tempfile.mkdtemp()
-        zipfile.ZipFile(checkpoint_path).extractall(targetDir)
-        #todo fix this
-        checkpoint_path = os.path.join(targetDir, "Passage ANCE(FirstP) Checkpoint")
 
-    print("Loading checkpoint %s" % checkpoint_path)
-    config, tokenizer, model = load_model(args, checkpoint_path)
-    return config, tokenizer, model
-    
     
 class ANCEPRF(ANCE):
     """
@@ -191,6 +179,10 @@ class ANCEPRF(ANCE):
         super().__init__(model_name=model_name)
         self.k = k
         self.return_docs = return_docs
+        self.model_name = model_name
+        # self.tokenizer = RobertaTokenizer.from_pretrained(self.model_namemodel_name, do_lower_case=True)
+        # self.tokenizer.do_lower_case = True
+    
         # for RochhioPRF parameters
         assert prf_type in ["anceprf","vectorprf","rocchioprf"]
         print(">>>>>>>>>>prf_type:", prf_type)
@@ -337,7 +329,8 @@ class ANCEPRF(ANCE):
             add_special_tokens=False,
             return_tensors='pt'
         )
-        inputs = inputs.to(self.args.device)
+        # inputs = inputs.to(self.args.device)
+        inputs = inputs.to(self.model.device)
         args = [inputs, torch.ones_like(inputs)]
 
         embeddings = self.model(*args).detach().cpu().numpy()
@@ -358,18 +351,19 @@ class ANCEPRF(ANCE):
         return embeddings
 
 
-    # def encode(self, prf_query : str):    
-    #     import transformers
-    #     inputs = self.tokenizer(
-    #         [prf_query],
-    #         max_length=512,
-    #         padding='longest',
-    #         truncation=True,
-    #         add_special_tokens=False,
-    #         return_tensors='pt'
-    #     )  
-    #    #inputs = inputs.to(cuda)
-    #     inputs = inputs.to(self.model.device)
-    #     embeddings = self.model(inputs["input_ids"], inputs["attention_mask"]).detach().cpu().numpy()
-    #     return embeddings
+    def encode_prf(self, prf_query : str):    
+        import transformers
+        inputs = self.tokenizer(
+            [prf_query],
+            max_length=512,
+            padding='longest',
+            truncation=True,
+            add_special_tokens=False,
+            return_tensors='pt'
+        )  
+        inputs = inputs.to(self.model.device)
+        with torch.no_grad():
+            embeddings = self.model(inputs["input_ids"], inputs["attention_mask"]).cpu().numpy()
+            # embeddings = self.model(inputs["input_ids"], inputs["attention_mask"]).detach().cpu().numpy()
+        return embeddings
     
