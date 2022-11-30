@@ -91,13 +91,14 @@ def main():
 
                 targets_row_wise = torch.zeros_like(scores_row_wise[:, 0]).long() 
                 loss_row_wise = loss_fn(scores_row_wise, targets_row_wise)
-                # acc_row_wise = ((scores_row_wise.max(dim=1).indices == targets_row_wise).sum) / scores_row_wise.shape[0].cpu().detach().item()
+                acc_row_wise = ((scores_row_wise.max(dim=1).indices == targets_row_wise).sum) / scores_row_wise.shape[0].cpu().detach().item()
                 
                 targets_col_wise = torch.zeros_like(scores_col_wise[:, 0]).long() 
                 loss_col_wise = loss_fn(scores_col_wise, targets_col_wise)
-                # acc_col_wise = ((scores_row_wise.max(dim=1).indices == targets_row_wise).sum) / scores_row_wise.shape[0].cpu().detach().item()
+                acc_col_wise = ((scores_row_wise.max(dim=1).indices == targets_row_wise).sum) / scores_row_wise.shape[0].cpu().detach().item()
                 
                 loss = loss_row_wise + loss_col_wise
+                acc = acc_row_wise + acc_col_wise
 
 
 
@@ -120,7 +121,7 @@ def main():
                 # if len(running_losses) == 100:
                     # logger.info(f'it={i+1} loss={sum(running_losses)/len(running_losses)} acc={sum(running_accs)/len(running_accs)}')
                     # running_losses, running_accs = [], []
-            writer.add_scalar("train/3.runningloss", sum(running_losses[-1000:])/len(running_losses[-1000:]), outer_i)   
+#             writer.add_scalar("train/3.runningloss", sum(running_losses[-1000:])/len(running_losses[-1000:]), outer_i)   
             
 
 
