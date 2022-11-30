@@ -33,7 +33,7 @@ def main():
 
     # colbert_model = ColBERT('./colbert-uog', modeltype='orig')
     # tct_model = TctColBert('bert-base-uncased', verbose=True) # lets firstly assume that we use TCTColBER
-    ref_model = ANCEPRF('./anceprf checkpoint') # use anceprf model as the reference model
+    ref_model = ANCE('./ance checkpoint') # use ance model as the reference model
     dd2q_model  = DD2Q('./dd2q', verbose=True)
     
 
